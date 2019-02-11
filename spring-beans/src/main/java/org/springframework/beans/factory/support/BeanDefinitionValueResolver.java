@@ -96,6 +96,12 @@ class BeanDefinitionValueResolver {
 	 * <li>A ManagedMap. In this case the value may be a RuntimeBeanReference
 	 * or Collection that will need to be resolved.
 	 * <li>An ordinary object or {@code null}, in which case it's left alone.
+	 *
+	 * 当容器在对属性进行依赖注入时，如果发现属性值需要进行类型转换，如属性值是容器中另一个Bean实例对象的引用，
+	 * 则容器首先需要根据属性值解析出所引用的对象，然后才能将该引用对象注入到目标实例对象的属性上去，
+	 * 对属性进行解析的由resolveValueIfNecessary方法实现
+	 *
+	 *
 	 * @param argName the name of the argument that the value is defined for
 	 * @param value the value object to resolve
 	 * @return the resolved object
@@ -103,24 +109,29 @@ class BeanDefinitionValueResolver {
 	public Object resolveValueIfNecessary(Object argName, Object value) {
 		// We must check each value to see whether it requires a runtime reference
 		// to another bean to be resolved.
+		//对引用类型的属性进行解析
 		if (value instanceof RuntimeBeanReference) {
 			RuntimeBeanReference ref = (RuntimeBeanReference) value;
 			return resolveReference(argName, ref);
 		}
+		//对属性值是引用容器中另一个Bean名称的解析
 		else if (value instanceof RuntimeBeanNameReference) {
 			String refName = ((RuntimeBeanNameReference) value).getBeanName();
 			refName = String.valueOf(doEvaluate(refName));
+			//从容器中获取指定名称的Bean
 			if (!this.beanFactory.containsBean(refName)) {
 				throw new BeanDefinitionStoreException(
 						"Invalid bean name '" + refName + "' in bean reference for " + argName);
 			}
 			return refName;
 		}
+		//对Bean类型属性的解析，主要是Bean中的内部类
 		else if (value instanceof BeanDefinitionHolder) {
 			// Resolve BeanDefinitionHolder: contains BeanDefinition with name and aliases.
 			BeanDefinitionHolder bdHolder = (BeanDefinitionHolder) value;
 			return resolveInnerBean(argName, bdHolder.getBeanName(), bdHolder.getBeanDefinition());
 		}
+
 		else if (value instanceof BeanDefinition) {
 			// Resolve plain BeanDefinition, without contained name: use dummy name.
 			BeanDefinition bd = (BeanDefinition) value;
@@ -128,14 +139,17 @@ class BeanDefinitionValueResolver {
 					ObjectUtils.getIdentityHexString(bd);
 			return resolveInnerBean(argName, innerBeanName, bd);
 		}
+		//对集合数组类型的属性解析
 		else if (value instanceof ManagedArray) {
 			// May need to resolve contained runtime references.
 			ManagedArray array = (ManagedArray) value;
 			Class<?> elementType = array.resolvedElementType;
 			if (elementType == null) {
+				//获取数组元素的类型
 				String elementTypeName = array.getElementTypeName();
 				if (StringUtils.hasText(elementTypeName)) {
 					try {
+						//使用反射机制创建指定类型的对象
 						elementType = ClassUtils.forName(elementTypeName, this.beanFactory.getBeanClassLoader());
 						array.resolvedElementType = elementType;
 					}
@@ -146,26 +160,34 @@ class BeanDefinitionValueResolver {
 								"Error resolving array type for " + argName, ex);
 					}
 				}
+				//没有获取到数组的类型，也没有获取到数组元素的类型，则直接设置数
+				//组的类型为Object
 				else {
 					elementType = Object.class;
 				}
 			}
+			//创建指定类型的数组
 			return resolveManagedArray(argName, (List<?>) value, elementType);
 		}
+		//解析list类型的属性值
 		else if (value instanceof ManagedList) {
 			// May need to resolve contained runtime references.
 			return resolveManagedList(argName, (List<?>) value);
 		}
+		//解析set类型的属性值
 		else if (value instanceof ManagedSet) {
 			// May need to resolve contained runtime references.
 			return resolveManagedSet(argName, (Set<?>) value);
 		}
+		//解析map类型的属性值
 		else if (value instanceof ManagedMap) {
 			// May need to resolve contained runtime references.
 			return resolveManagedMap(argName, (Map<?, ?>) value);
 		}
+		//解析props类型的属性值，props其实就是key和value均为字符串的map
 		else if (value instanceof ManagedProperties) {
 			Properties original = (Properties) value;
+			//创建一个拷贝，用于作为解析后的返回值
 			Properties copy = new Properties();
 			for (Map.Entry<Object, Object> propEntry : original.entrySet()) {
 				Object propKey = propEntry.getKey();
@@ -180,15 +202,19 @@ class BeanDefinitionValueResolver {
 			}
 			return copy;
 		}
+		//解析字符串类型的属性值
 		else if (value instanceof TypedStringValue) {
 			// Convert value to target type here.
 			TypedStringValue typedStringValue = (TypedStringValue) value;
 			Object valueObject = evaluate(typedStringValue);
 			try {
+				//获取属性的目标类型
 				Class<?> resolvedTargetType = resolveTargetType(typedStringValue);
 				if (resolvedTargetType != null) {
+					//对目标类型的属性进行解析，递归调用
 					return this.typeConverter.convertIfNecessary(valueObject, resolvedTargetType);
 				}
+				//没有获取到属性的目标对象，则按Object类型返回
 				else {
 					return valueObject;
 				}
@@ -333,11 +359,14 @@ class BeanDefinitionValueResolver {
 
 	/**
 	 * Resolve a reference to another bean in the factory.
+	 * 解析引用类型的属性值
 	 */
 	private Object resolveReference(Object argName, RuntimeBeanReference ref) {
 		try {
+			//获取引用的Bean名称
 			String refName = ref.getBeanName();
 			refName = String.valueOf(doEvaluate(refName));
+			//如果引用的对象在父类容器中，则从父类容器中获取指定的引用对象
 			if (ref.isToParent()) {
 				if (this.beanFactory.getParentBeanFactory() == null) {
 					throw new BeanCreationException(
@@ -347,8 +376,11 @@ class BeanDefinitionValueResolver {
 				}
 				return this.beanFactory.getParentBeanFactory().getBean(refName);
 			}
+			//从当前的容器中获取指定的引用Bean对象，如果指定的Bean没有被实例化
+			//则会递归触发引用Bean的初始化和依赖注入
 			else {
 				Object bean = this.beanFactory.getBean(refName);
+				//将当前实例化对象的依赖引用对象
 				this.beanFactory.registerDependentBean(refName, this.beanName);
 				return bean;
 			}
@@ -362,10 +394,13 @@ class BeanDefinitionValueResolver {
 
 	/**
 	 * For each element in the managed array, resolve reference if necessary.
+	 * //解析array类型的属性
 	 */
 	private Object resolveManagedArray(Object argName, List<?> ml, Class<?> elementType) {
+		//创建一个指定类型的数组，用于存放和返回解析后的数组
 		Object resolved = Array.newInstance(elementType, ml.size());
 		for (int i = 0; i < ml.size(); i++) {
+			//递归解析array的每一个元素，并将解析后的值设置到resolved数组中，索引为i
 			Array.set(resolved, i,
 					resolveValueIfNecessary(new KeyedArgName(argName, i), ml.get(i)));
 		}
@@ -374,6 +409,7 @@ class BeanDefinitionValueResolver {
 
 	/**
 	 * For each element in the managed list, resolve reference if necessary.
+	 * //解析list类型的属性
 	 */
 	private List<?> resolveManagedList(Object argName, List<?> ml) {
 		List<Object> resolved = new ArrayList<Object>(ml.size());
